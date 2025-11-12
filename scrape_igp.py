@@ -37,19 +37,30 @@ def lambda_handler(event, context):
     sismos = []
     for feature in data['features']:
         a = feature['attributes']
-        fecha = datetime.utcfromtimestamp(a['fechaevento'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Si no hay fecha, saltar este registro
+        if not a.get('fechaevento'):
+            continue
+
+        # Convertir fecha (epoch ms → ISO 8601)
+        try:
+            fecha = datetime.utcfromtimestamp(a['fechaevento'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            fecha = "N/A"
+
         sismos.append({
             'id': str(uuid.uuid4()),
-            'objectid': str(a['objectid']),
+            'objectid': str(a.get('objectid', '')),
             'fechaevento': fecha,
-            'hora': a['hora'],
-            'magnitud': str(a['magnitud']),
-            'lat': a['lat'],
-            'lon': a['lon'],
-            'profundidad_km': a['prof'],
-            'referencia': a['ref'],
-            'departamento': a['departamento']
+            'hora': a.get('hora', ''),
+            'magnitud': str(a.get('magnitud', '')),
+            'lat': a.get('lat', 0),
+            'lon': a.get('lon', 0),
+            'profundidad_km': a.get('prof', 0),
+            'referencia': a.get('ref', ''),
+            'departamento': a.get('departamento', '')
         })
+
 
     # Guardar en DynamoDB
     dynamodb = boto3.resource('dynamodb')
@@ -74,3 +85,4 @@ def lambda_handler(event, context):
             'datos': sismos
         }, ensure_ascii=False)
     }
+
