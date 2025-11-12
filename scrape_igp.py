@@ -78,7 +78,7 @@ def lambda_handler(event, context):
                 "message": "Últimos sismos guardados en DynamoDB correctamente",
                 "cantidad": len(sismos),
                 "data": sismos
-            }, ensure_ascii=False)
+            }, ensure_ascii=False,default=str)
         }
 
     except requests.RequestException as e:
@@ -91,3 +91,4 @@ def lambda_handler(event, context):
             "statusCode": 500,
             "body": json.dumps({"error": f"Error inesperado: {str(e)}"})
         }
+
