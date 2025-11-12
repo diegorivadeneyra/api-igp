@@ -1,6 +1,11 @@
 import json
 import requests
-from decimal import Decimal
+
+def safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 def lambda_handler(event, context):
     try:
@@ -32,15 +37,15 @@ def lambda_handler(event, context):
         # Extraer los sismos
         sismos = []
         for f in data["features"]:
-            attrs = f["attributes"]
+            attrs = f.get("attributes", {})
             sismo = {
                 "id": attrs.get("objectid"),
                 "fecha": attrs.get("fechaevento"),
                 "hora": attrs.get("hora"),
-                "magnitud": float(attrs.get("magnitud", 0)),
-                "latitud": float(attrs.get("lat", 0)),
-                "longitud": float(attrs.get("lon", 0)),
-                "profundidad_km": float(attrs.get("prof", 0)),
+                "magnitud": safe_float(attrs.get("magnitud")),
+                "latitud": safe_float(attrs.get("lat")),
+                "longitud": safe_float(attrs.get("lon")),
+                "profundidad_km": safe_float(attrs.get("prof")),
                 "referencia": attrs.get("ref"),
                 "departamento": attrs.get("departamento")
             }
