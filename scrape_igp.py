@@ -1,58 +1,71 @@
-from datetime import datetime
-from decimal import Decimal
 import requests
+from bs4 import BeautifulSoup
 import boto3
 import uuid
+from decimal import Decimal
 
 def lambda_handler(event, context):
     url = "https://ultimosismo.igp.gob.pe/ultimosismo/sismos-reportados"
     response = requests.get(url)
     if response.status_code != 200:
-        return {'statusCode': response.status_code, 'body': 'Error al acceder al servicio del IGP'}
+        return {
+            'statusCode': response.status_code,
+            'body': 'Error al acceder al sitio del IGP'
+        }
 
-    data = response.json()
-    features = data.get('features', [])
+    soup = BeautifulSoup(response.text, 'html.parser')
 
-    sismos = []
-    for feature in features[:10]:  # Solo los 10 últimos
-        a = feature.get('attributes', {})
-        if not a.get('fechaevento'):
+    # Buscar la tabla principal de sismos
+    table = soup.find('table')
+    if not table:
+        return {
+            'statusCode': 404,
+            'body': 'No se encontró la tabla de sismos en el sitio del IGP'
+        }
+
+    # Obtener encabezados
+    headers = [th.text.strip() for th in table.find_all('th')]
+
+    # Obtener filas
+    rows = []
+    for tr in table.find_all('tr')[1:11]:  # Solo los 10 primeros
+        tds = tr.find_all('td')
+        if len(tds) < len(headers):
             continue
 
-        try:
-            fecha = datetime.utcfromtimestamp(a['fechaevento'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        except Exception:
-            fecha = "N/A"
+        row_data = {}
+        for i, td in enumerate(tds):
+            header = headers[i]
+            value = td.text.strip()
 
-        # Conversión segura de floats a Decimal
-        def safe_decimal(x):
+            # Intentar convertir valores numéricos a Decimal
             try:
-                return Decimal(str(x))
+                if header.lower() in ['latitud', 'longitud', 'magnitud', 'profundidad (km)']:
+                    value = Decimal(str(value))
             except:
-                return Decimal('0')
+                pass
 
-        sismos.append({
-            'id': str(uuid.uuid4()),
-            'objectid': str(a.get('objectid', '')),
-            'fechaevento': fecha,
-            'hora': a.get('hora', ''),
-            'magnitud': safe_decimal(a.get('magnitud', 0)),
-            'lat': safe_decimal(a.get('lat', 0)),
-            'lon': safe_decimal(a.get('lon', 0)),
-            'profundidad_km': safe_decimal(a.get('prof', 0)),
-            'referencia': a.get('ref', ''),
-            'departamento': a.get('departamento', '')
-        })
+            row_data[header] = value
 
-    # Guardar los datos en DynamoDB
+        row_data['id'] = str(uuid.uuid4())
+        rows.append(row_data)
+
+    # Guardar en DynamoDB
     dynamodb = boto3.resource('dynamodb')
     table = dynamodb.Table('TablaWebScrappingIGP')
 
+    # Vaciar antes de insertar (opcional)
+    scan = table.scan()
     with table.batch_writer() as batch:
-        for sismo in sismos:
-            batch.put_item(Item=sismo)
+        for each in scan.get('Items', []):
+            batch.delete_item(Key={'id': each['id']})
+
+    # Insertar los nuevos
+    with table.batch_writer() as batch:
+        for row in rows:
+            batch.put_item(Item=row)
 
     return {
         'statusCode': 200,
-        'body': sismos
+        'body': rows
     }
