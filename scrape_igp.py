@@ -1,71 +1,68 @@
+import json
 import requests
-from bs4 import BeautifulSoup
-import boto3
-import uuid
 from decimal import Decimal
 
 def lambda_handler(event, context):
-    url = "https://ultimosismo.igp.gob.pe/ultimosismo/sismos-reportados"
-    response = requests.get(url)
-    if response.status_code != 200:
-        return {
-            'statusCode': response.status_code,
-            'body': 'Error al acceder al sitio del IGP'
+    try:
+        # Endpoint ArcGIS oficial del IGP
+        url = "https://ide.igp.gob.pe/arcgis/rest/services/monitoreocensis/SismosReportados/MapServer/0/query"
+        
+        # Parámetros del query (últimos 10 sismos)
+        params = {
+            "where": "1=1",
+            "outFields": "objectid,fechaevento,hora,magnitud,lat,lon,prof,ref,departamento",
+            "orderByFields": "fechaevento DESC",
+            "resultRecordCount": 10,
+            "f": "json"
         }
 
-    soup = BeautifulSoup(response.text, 'html.parser')
+        # Petición al servicio
+        response = requests.get(url, params=params)
+        response.raise_for_status()
 
-    # Buscar la tabla principal de sismos
-    table = soup.find('table')
-    if not table:
+        data = response.json()
+
+        # Validar si hay datos
+        if "features" not in data:
+            return {
+                "statusCode": 404,
+                "body": json.dumps({"message": "No se encontraron datos de sismos en el servicio del IGP"})
+            }
+
+        # Extraer los sismos
+        sismos = []
+        for f in data["features"]:
+            attrs = f["attributes"]
+            sismo = {
+                "id": attrs.get("objectid"),
+                "fecha": attrs.get("fechaevento"),
+                "hora": attrs.get("hora"),
+                "magnitud": float(attrs.get("magnitud", 0)),
+                "latitud": float(attrs.get("lat", 0)),
+                "longitud": float(attrs.get("lon", 0)),
+                "profundidad_km": float(attrs.get("prof", 0)),
+                "referencia": attrs.get("ref"),
+                "departamento": attrs.get("departamento")
+            }
+            sismos.append(sismo)
+
+        # Respuesta exitosa
         return {
-            'statusCode': 404,
-            'body': 'No se encontró la tabla de sismos en el sitio del IGP'
+            "statusCode": 200,
+            "body": json.dumps({
+                "message": "Últimos sismos reportados por el IGP",
+                "cantidad": len(sismos),
+                "data": sismos
+            }, default=str)
         }
 
-    # Obtener encabezados
-    headers = [th.text.strip() for th in table.find_all('th')]
-
-    # Obtener filas
-    rows = []
-    for tr in table.find_all('tr')[1:11]:  # Solo los 10 primeros
-        tds = tr.find_all('td')
-        if len(tds) < len(headers):
-            continue
-
-        row_data = {}
-        for i, td in enumerate(tds):
-            header = headers[i]
-            value = td.text.strip()
-
-            # Intentar convertir valores numéricos a Decimal
-            try:
-                if header.lower() in ['latitud', 'longitud', 'magnitud', 'profundidad (km)']:
-                    value = Decimal(str(value))
-            except:
-                pass
-
-            row_data[header] = value
-
-        row_data['id'] = str(uuid.uuid4())
-        rows.append(row_data)
-
-    # Guardar en DynamoDB
-    dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('TablaWebScrappingIGP')
-
-    # Vaciar antes de insertar (opcional)
-    scan = table.scan()
-    with table.batch_writer() as batch:
-        for each in scan.get('Items', []):
-            batch.delete_item(Key={'id': each['id']})
-
-    # Insertar los nuevos
-    with table.batch_writer() as batch:
-        for row in rows:
-            batch.put_item(Item=row)
-
-    return {
-        'statusCode': 200,
-        'body': rows
-    }
+    except requests.RequestException as e:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": f"Error al conectar con el IGP: {str(e)}"})
+        }
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": f"Error inesperado: {str(e)}"})
+        }
